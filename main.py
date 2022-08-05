@@ -1,8 +1,6 @@
 import os
-import pprint
 
 import pandas as pd
-
 from datetime import timedelta
 
 from couchbase.auth import PasswordAuthenticator
@@ -19,7 +17,6 @@ from couchbase.exceptions import (
     QueryIndexNotFoundException,
     CouchbaseException
 )
-from couchbase.collection import Collection
 
 from handle_exceptions import handle_exception
 
@@ -76,6 +73,15 @@ def add_column_collection(scope, collection):
     add_test_column.execute()
 
 
+def merge_csv(df_local, scope, collection):
+    df_db = pd.read_csv(f"{bucket_name}/{scope}/{collection}.csv")
+    if "testColumn" not in df_local.columns and bool(list(df_local.columns)) is True:
+        column_name = [column for column in df_local.columns if column in df_db.columns][0]
+
+        df_local = df_local.merge(df_db, how="inner", on=column_name)
+        df_local.to_csv(f"{bucket_name}/{scope}/{collection}.csv")
+
+
 def main():
     cluster = cluster_()
     scopes = get_scopes()
@@ -112,12 +118,10 @@ def main():
 
             os.makedirs(f"{bucket_name}/{scope.name}", exist_ok=True)
             df = pd.DataFrame(data)
-            print(df.columns)
             df.to_csv(f"{bucket_name}/{scope.name}/{collection.name}.csv")
+            print(list(df.columns))
 
-
-def merge_csv():
-    pass
+            merge_csv(df_local=df, scope=scope.name, collection=collection.name)
 
 
 if __name__ == '__main__':
