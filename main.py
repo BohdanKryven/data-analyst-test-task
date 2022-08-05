@@ -12,7 +12,6 @@ from couchbase.options import (
     QueryOptions
 )
 from couchbase.exceptions import (
-    MissingConnectionException,
     AmbiguousTimeoutException,
     QueryIndexNotFoundException,
     CouchbaseException
@@ -36,9 +35,7 @@ def cluster_():
     return cluster
 
 
-def get_scopes():
-    cluster = cluster_()
-
+def get_scopes(cluster):
     connection = cluster.connection
 
     manager = CollectionManager(
@@ -50,9 +47,7 @@ def get_scopes():
     return scopes
 
 
-def create_primary_index(scope, collection):
-    cluster = cluster_()
-
+def create_primary_index(cluster, scope, collection):
     try:
         primary_index = f"CREATE PRIMARY INDEX ON `default`:`{bucket_name}`.{scope}.{collection}"
         creating_primary_index = cluster.query(
@@ -63,9 +58,31 @@ def create_primary_index(scope, collection):
         handle_exception(ex)
 
 
-def add_column_collection(scope, collection):
-    cluster = cluster_()
+def load_data(cluster, scope, collection):
+    sql_query = f"SELECT * FROM`{bucket_name}`.{scope}.{collection}"
 
+    row_iter = cluster.query(
+        sql_query,
+        QueryOptions(metrics=True),
+    )
+    if row_iter:
+        add_column_collection(cluster=cluster, scope=scope, collection=collection)
+
+    data = []
+    try:
+        for row in row_iter.rows():
+            data.append(row[collection])
+
+    except (
+            AmbiguousTimeoutException,
+            QueryIndexNotFoundException
+    ) as ex:
+        handle_exception(ex)
+
+    return data
+
+
+def add_column_collection(cluster, scope, collection):
     test_column = f"UPDATE`{bucket_name}`.{scope}.{collection} SET testColumn = 'testData';"
     add_test_column = cluster.query(
         test_column,
@@ -82,46 +99,37 @@ def merge_csv(df_local, scope, collection):
         df_local.to_csv(f"{bucket_name}/{scope}/{collection}.csv")
 
 
+def save_to_csv(scope, collection, df):
+    os.makedirs(f"{bucket_name}/{scope}", exist_ok=True)
+    df.to_csv(f"{bucket_name}/{scope}/{collection}.csv")
+
+
 def main():
     cluster = cluster_()
-    scopes = get_scopes()
+    scopes = get_scopes(cluster=cluster)
 
     for scope in scopes:
         collections = scope.collections
-        print("Scope name: ", scope.name)
+        scope_name = scope.name
+        print("Scope name: ", scope_name)
 
         for collection in collections:
-            print("Collection name: ", collection.name)
+            collection_name = collection.name
+            print("Collection name: ", collection_name)
+
             if not cluster.search_indexes():
-                create_primary_index(scope=scope.name, collection=collection.name)
+                create_primary_index(cluster=cluster, scope=scope_name, collection=collection_name)
 
-            sql_query = f"SELECT * FROM`{bucket_name}`.{scope.name}.{collection.name}"
+            add_column_collection(cluster=cluster, scope=scope_name, collection=collection_name)
 
-            row_iter = cluster.query(
-                sql_query,
-                QueryOptions(metrics=True),
-            )
-            if row_iter:
-                add_column_collection(scope=scope.name, collection=collection.name)
-
-            data = []
-            try:
-                for row in row_iter.rows():
-                    data.append(row[collection.name])
-
-            except (
-                    AmbiguousTimeoutException,
-                    QueryIndexNotFoundException
-            ) as ex:
-                handle_exception(ex)
-                continue
-
-            os.makedirs(f"{bucket_name}/{scope.name}", exist_ok=True)
+            data = load_data(cluster=cluster, scope=scope_name, collection=collection_name)
             df = pd.DataFrame(data)
-            df.to_csv(f"{bucket_name}/{scope.name}/{collection.name}.csv")
-            print(list(df.columns))
 
-            merge_csv(df_local=df, scope=scope.name, collection=collection.name)
+            save_to_csv(scope=scope_name, collection=collection_name, df=df)
+
+            merge_csv(df_local=df, scope=scope_name, collection=collection_name)
+
+        print("\n")
 
 
 if __name__ == '__main__':
